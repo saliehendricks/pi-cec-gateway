@@ -7,6 +7,7 @@ import json
 import os
 import re
 import subprocess
+import threading
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -36,22 +37,26 @@ COMMANDS = {
     "volume_down": "voldown",
     "mute": "mute",
 }
+CEC_LOCK = threading.Lock()
 
 
 def cec(*commands: str) -> str:
-    request = "\n".join(commands) + "\nquit\n"
-    result = subprocess.run(
-        [CEC_CLIENT, "-s", "-d", "1"],
-        input=request,
-        text=True,
-        capture_output=True,
-        timeout=15,
-        check=False,
-    )
-    output = f"{result.stdout}\n{result.stderr}"
-    if result.returncode != 0:
-        raise RuntimeError(output.strip() or "cec-client failed")
-    return output
+    with CEC_LOCK:
+        outputs = []
+        for command in commands:
+            result = subprocess.run(
+                [CEC_CLIENT, "-s", "-d", "1"],
+                input=f"{command}\nquit\n",
+                text=True,
+                capture_output=True,
+                timeout=15,
+                check=False,
+            )
+            output = f"{result.stdout}\n{result.stderr}"
+            if result.returncode != 0:
+                raise RuntimeError(output.strip() or "cec-client failed")
+            outputs.append(output)
+        return "\n".join(outputs)
 
 
 def power_state() -> str:
@@ -64,6 +69,9 @@ def power_state() -> str:
 
 
 def parse_active_source(output: str) -> str:
+    match = re.search(r"(?:[0-9a-f]{2}:)?82:([0-9a-f]{2}):([0-9a-f]{2})", output, re.I)
+    if match:
+        return f"0x{match.group(1)}{match.group(2)}"
     match = re.search(r"currently active source:\s*(.+?)\s*\((\d+)\)", output, re.I)
     if match:
         return match.group(1).strip()
@@ -72,18 +80,32 @@ def parse_active_source(output: str) -> str:
 
 
 def parse_audio_status(output: str) -> dict[str, str | int]:
-    match = re.search(r"audio status.*?volume:\s*(\d+).*?mute:\s*(\w+)", output, re.I | re.S)
+    match = re.search(r"(?:[0-9a-f]{2}:)?7a:([0-9a-f]{2})", output, re.I)
     if not match:
         return {"volume": "unknown", "mute": "unknown"}
-    return {"volume": int(match.group(1)), "mute": match.group(2).lower()}
+    value = int(match.group(1), 16)
+    return {"volume": value & 0x7F, "mute": "on" if value & 0x80 else "off"}
+
+
+def parse_playback(output: str) -> str:
+    match = re.search(r"(?:[0-9a-f]{2}:)?1b:([0-9a-f:]+)", output, re.I)
+    return match.group(1) if match else "unknown"
 
 
 def status() -> dict[str, str | int]:
-    output = cec("pow 0", "active", f"tx {INITIATOR}0:7A")
+    output = cec(
+        "pow 0",
+        "lad",
+        "tx 1F:85",
+        f"tx {INITIATOR}0:7A",
+        f"tx {INITIATOR}5:7A",
+        "tx 14:1A",
+        "tx 18:1A",
+    )
     result: dict[str, str | int] = {
         "power": "on" if "power status: on" in output.lower() else "off" if "power status: standby" in output.lower() else "unknown",
         "active_source": parse_active_source(output),
-        "playback": "unknown",
+        "playback": parse_playback(output),
     }
     result.update(parse_audio_status(output))
     return result
