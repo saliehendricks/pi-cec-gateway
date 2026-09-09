@@ -39,6 +39,7 @@ class PiCecRemote(RemoteEntity):
             "model": "libCEC gateway",
         }
         self._is_on = False
+        self._status: dict[str, Any] = {}
 
     @property
     def is_on(self) -> bool:
@@ -49,7 +50,8 @@ class PiCecRemote(RemoteEntity):
         try:
             async with session.get(f"http://{self._host}:{self._port}/api/status") as response:
                 response.raise_for_status()
-                self._is_on = (await response.json())["power"] == "on"
+                self._status = await response.json()
+                self._is_on = self._status.get("power") == "on"
                 self._attr_available = True
         except (ClientError, OSError, KeyError, ValueError):
             self._attr_available = False
@@ -63,8 +65,30 @@ class PiCecRemote(RemoteEntity):
         self._is_on = state == "on"
         self.async_write_ha_state()
 
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {
+            "active_source": self._status.get("active_source", "unknown"),
+            "volume": self._status.get("volume", "unknown"),
+            "mute": self._status.get("mute", "unknown"),
+            "playback": self._status.get("playback", "unknown"),
+        }
+
     async def async_turn_on(self, **kwargs: Any) -> None:
         await self._set_power("on")
 
     async def async_turn_off(self, **kwargs: Any) -> None:
         await self._set_power("off")
+
+    async def async_send_command(self, command: list[str], **kwargs: Any) -> None:
+        session = async_get_clientsession(self.hass)
+        for item in command:
+            payload: dict[str, str]
+            if item.startswith("source:"):
+                payload = {"command": "source", "physical_address": item.split(":", 1)[1]}
+            else:
+                payload = {"command": item}
+            async with session.put(
+                f"http://{self._host}:{self._port}/api/command", json=payload
+            ) as response:
+                response.raise_for_status()
