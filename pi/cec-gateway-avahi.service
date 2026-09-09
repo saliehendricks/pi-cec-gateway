@@ -1,0 +1,13 @@
+[Unit]
+Description=Advertise Raspberry Pi HDMI-CEC gateway
+After=cec-gateway.service
+Requires=cec-gateway.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/avahi-publish-service -s "HDMI CEC" _arctt-cec._tcp 8765 serialno=venue-pi version=1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
