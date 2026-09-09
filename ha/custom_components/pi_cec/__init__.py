@@ -4,7 +4,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 
 DOMAIN = "pi_cec"
-PLATFORMS = ("remote",)
+PLATFORMS = ("remote", "sensor")
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
