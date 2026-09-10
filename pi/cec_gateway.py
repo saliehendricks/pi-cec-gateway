@@ -92,6 +92,27 @@ def parse_playback(output: str) -> str:
     return match.group(1) if match else "unknown"
 
 
+def scan_devices() -> list[dict[str, str]]:
+    output = cec("scan")
+    devices: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in output.splitlines():
+        match = re.match(r"device #(\d+): (.+)", line.strip())
+        if match:
+            if current and current["logical_address"] != "0":
+                devices.append(current)
+            current = {"logical_address": match.group(1), "name": match.group(2)}
+            continue
+        if current is None:
+            continue
+        key, separator, value = line.strip().partition(":")
+        if separator and key in {"address", "vendor", "osd string", "power status"}:
+            current[key.replace(" ", "_")] = value.strip()
+    if current and current["logical_address"] != "0":
+        devices.append(current)
+    return devices
+
+
 def status() -> dict[str, str | int]:
     output = cec(
         "pow 0",
@@ -130,6 +151,12 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self) -> None:
+        if self.path == "/api/devices":
+            try:
+                self._send(HTTPStatus.OK, {"devices": scan_devices()})
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+                self._send(HTTPStatus.SERVICE_UNAVAILABLE, {"error": str(error)})
+            return
         if self.path != "/api/status":
             self._send(HTTPStatus.NOT_FOUND, {"error": "not_found"})
             return

@@ -12,14 +12,6 @@ from homeassistant.components.select import SelectEntity
 
 from . import DOMAIN
 
-SOURCES = {
-    "HDMI 1": "1000",
-    "HDMI 2": "2000",
-    "HDMI 3": "3000",
-    "HDMI 4": "4000",
-}
-
-
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
@@ -31,7 +23,7 @@ class CecSourceSelect(SelectEntity):
 
     _attr_has_entity_name = True
     _attr_name = "HDMI Source"
-    _attr_options = list(SOURCES)
+    _attr_options = []
     _attr_should_poll = True
 
     def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
@@ -46,6 +38,7 @@ class CecSourceSelect(SelectEntity):
             "model": "libCEC gateway",
         }
         self._attr_current_option = None
+        self._sources: dict[str, str] = {}
 
     async def async_update(self) -> None:
         session = async_get_clientsession(self.hass)
@@ -53,11 +46,21 @@ class CecSourceSelect(SelectEntity):
             async with session.get(f"http://{self._host}:{self._port}/api/status") as response:
                 response.raise_for_status()
                 physical = (await response.json()).get("active_source", "")
+                self._attr_available = True
+            async with session.get(f"http://{self._host}:{self._port}/api/devices") as response:
+                response.raise_for_status()
+                devices = (await response.json()).get("devices", [])
+                self._sources = {
+                    f"HDMI {device['address'][0]} - {device.get('osd_string', device['name'])}": device["address"].replace(".", "")
+                    for device in devices
+                    if device.get("address", "")[:1].isdigit()
+                    and device.get("address", "").count(".") == 3
+                }
+                self._attr_options = list(self._sources)
                 self._attr_current_option = next(
-                    (name for name, address in SOURCES.items() if address == physical.removeprefix("0x")),
+                    (name for name, address in self._sources.items() if address == physical.removeprefix("0x")),
                     None,
                 )
-                self._attr_available = True
         except (ClientError, OSError, KeyError, ValueError):
             self._attr_available = False
 
@@ -65,7 +68,7 @@ class CecSourceSelect(SelectEntity):
         session = async_get_clientsession(self.hass)
         async with session.put(
             f"http://{self._host}:{self._port}/api/command",
-            json={"command": "source", "physical_address": SOURCES[option]},
+            json={"command": "source", "physical_address": self._sources[option]},
         ) as response:
             response.raise_for_status()
         self._attr_current_option = option
